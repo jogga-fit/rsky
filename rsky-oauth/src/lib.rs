@@ -35,9 +35,9 @@ pub use error::OAuthError;
 pub use jwk::{EcCurve, Jwk, JwkSet};
 pub use jwt::{DecodedJwt, JwtClaims, JwtHeader};
 pub use provider::{
-    AccountProof, ActiveOAuthSession, AuthorizeOutcome, AuthorizePageData, ClientCredentials,
-    OAuthProvider, OAuthProviderConfig, ParResponse, ScopeExpandError, ScopeExpander, SessionInfo,
-    SignInResult, TokenRequest, VerifiedAccess,
+    AccessTokens, AccountProof, ActiveOAuthSession, AuthorizeOutcome, AuthorizePageData,
+    ClientCredentials, OAuthProvider, OAuthProviderConfig, ParResponse, ScopeExpandError,
+    ScopeExpander, SessionInfo, SignInResult, TokenRequest, VerifiedAccess,
 };
 pub use store::{AccountInfo, DeviceAccount, DeviceData, MemoryOAuthStore, OAuthStore};
 pub use types::{AuthorizationRequestParameters, ClientAuth, OAuthClientMetadata, TokenResponse};

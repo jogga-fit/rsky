@@ -167,9 +167,26 @@ pub struct VerifiedAccess {
     pub token_id: String,
 }
 
+/// Where a resource server finds the grants of an access token.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AccessTokens {
+    /// The token names a stored session, and the session holds the scope.
+    /// A revocation takes effect immediately.
+    #[default]
+    Stateful,
+    /// The token carries its scope, so a resource server that does not hold
+    /// the sessions (one that trusts an external issuer) checks it alone.
+    /// A revocation takes effect when the token expires.
+    Stateless,
+}
+
 pub struct OAuthProviderConfig {
     /// The AS issuer origin, e.g. `https://pds.example.com`.
     pub issuer: String,
+    /// The origin of the resource server (the PDS). It is the issuer when the
+    /// PDS is its own authorization server.
+    pub resource: String,
+    pub access_tokens: AccessTokens,
     /// The `aud` of issued access tokens (the PDS service DID).
     pub audience: String,
     /// The key access tokens are signed with.
@@ -189,6 +206,8 @@ pub struct OAuthProviderConfig {
 
 pub struct OAuthProvider {
     issuer: String,
+    resource: String,
+    access_tokens: AccessTokens,
     audience: String,
     signing_key: SigningKey,
     clients: ClientManager,
@@ -203,6 +222,8 @@ impl OAuthProvider {
     pub fn new(config: OAuthProviderConfig) -> Self {
         Self {
             issuer: config.issuer,
+            resource: config.resource,
+            access_tokens: config.access_tokens,
             audience: config.audience,
             signing_key: config.signing_key,
             clients: ClientManager::new(config.fetcher),
@@ -1128,8 +1149,8 @@ impl OAuthProvider {
             .dpop_jkt
             .as_deref()
             .ok_or_else(|| OAuthError::ServerError("missing DPoP key binding".to_string()))?;
-        // The same claim set as the reference PDS's stateful tokens: the
-        // scope lives with the stored session, not in the token.
+        // The same claim set as the reference PDS: a stateful token leaves
+        // the scope with the stored session, a stateless one carries it.
         let mut header = JwtHeader::new(self.signing_key.alg()?);
         header.typ = Some(ACCESS_TOKEN_TYP.to_string());
         let mut claims = JwtClaims {
@@ -1145,6 +1166,11 @@ impl OAuthProvider {
         claims
             .extra
             .insert("client_id".to_string(), json!(data.client_id));
+        if self.access_tokens == AccessTokens::Stateless {
+            claims
+                .extra
+                .insert("scope".to_string(), json!(data.granted_scope()));
+        }
         let access_token = jwt::sign_with(&header, &claims, &self.signing_key)?;
         Ok(TokenResponse {
             access_token,
@@ -1187,13 +1213,11 @@ impl OAuthProvider {
         Ok(())
     }
 
-    /// Validates a DPoP-bound access token presented to the resource
-    /// server, including revocation via the store.
-    /// Verifies a DPoP-bound access token the way the reference PDS does in
-    /// its stateful mode: the signature and standard claims must hold, and
-    /// then the stored session is authoritative for the key binding, the
-    /// expiry, and the granted scope, so revocation and rotation take effect
-    /// immediately.
+    /// Verifies a DPoP-bound access token presented to the resource server:
+    /// the signature and standard claims must hold. A stateful token is then
+    /// checked against its stored session, which is authoritative for the key
+    /// binding, the expiry and the granted scope, so revocation and rotation
+    /// take effect immediately. A stateless token is authoritative itself.
     pub async fn verify_access_token(
         &self,
         access_token: &str,
@@ -1229,23 +1253,35 @@ impl OAuthProvider {
                 "access token is not DPoP-bound".to_string(),
             ));
         };
-        let Some(stored) = self.store.read_token(&token_id).await? else {
-            return Err(OAuthError::InvalidToken("Invalid token".to_string()));
+        let scope = match self.access_tokens {
+            AccessTokens::Stateful => {
+                let Some(stored) = self.store.read_token(&token_id).await? else {
+                    return Err(OAuthError::InvalidToken("Invalid token".to_string()));
+                };
+                if stored.data.did != did || stored.data.parameters.dpop_jkt.as_deref() != Some(jkt)
+                {
+                    self.store.delete_token(&token_id).await?;
+                    return Err(OAuthError::InvalidToken("Invalid token".to_string()));
+                }
+                if stored.data.expires_at <= now {
+                    self.store.delete_token(&token_id).await?;
+                    return Err(OAuthError::InvalidToken("Token expired".to_string()));
+                }
+                stored.data.granted_scope().to_string()
+            }
+            AccessTokens::Stateless => match (
+                decoded.claims.exp,
+                decoded.claims.extra.get("scope").and_then(Value::as_str),
+            ) {
+                (Some(_), Some(scope)) => scope.to_string(),
+                _ => {
+                    return Err(OAuthError::InvalidToken(
+                        "malformed access token".to_string(),
+                    ))
+                }
+            },
         };
-        if stored.data.did != did || stored.data.parameters.dpop_jkt.as_deref() != Some(jkt) {
-            self.store.delete_token(&token_id).await?;
-            return Err(OAuthError::InvalidToken("Invalid token".to_string()));
-        }
-        if stored.data.expires_at <= now {
-            self.store.delete_token(&token_id).await?;
-            return Err(OAuthError::InvalidToken("Token expired".to_string()));
-        }
-        let scopes: Vec<String> = stored
-            .data
-            .granted_scope()
-            .split_ascii_whitespace()
-            .map(String::from)
-            .collect();
+        let scopes: Vec<String> = scope.split_ascii_whitespace().map(String::from).collect();
         if !scopes.iter().any(|scope| scope == SCOPE_ATPROTO) {
             return Err(OAuthError::InvalidToken(format!(
                 "access token is missing the \"{SCOPE_ATPROTO}\" scope"
@@ -1309,14 +1345,14 @@ impl OAuthProvider {
             "require_pushed_authorization_requests": true,
             "dpop_signing_alg_values_supported": ["ES256", "ES256K"],
             "client_id_metadata_document_supported": true,
-            "protected_resources": [issuer],
+            "protected_resources": [self.resource],
         })
     }
 
     /// RFC 9728 protected resource metadata document.
     pub fn protected_resource_metadata(&self) -> Value {
         json!({
-            "resource": self.issuer,
+            "resource": self.resource,
             "authorization_servers": [self.issuer],
             "scopes_supported": [],
             "bearer_methods_supported": ["header"],
@@ -1505,6 +1541,7 @@ mod tests {
         trusted: Vec<String>,
         sessions_since: Option<u64>,
         expander: bool,
+        access_tokens: AccessTokens,
     }
 
     fn account(did: &str, handle: &str, email: Option<&str>) -> AccountInfo {
@@ -1537,6 +1574,8 @@ mod tests {
         let expander = Arc::new(StubExpander::default());
         let provider = OAuthProvider::new(OAuthProviderConfig {
             issuer: ISSUER.to_string(),
+            resource: ISSUER.to_string(),
+            access_tokens: options.access_tokens,
             audience: AUDIENCE.to_string(),
             signing_key: signing_key(),
             fetcher: Arc::new(StubFetcher { clients }),
@@ -3240,6 +3279,59 @@ mod tests {
             .is_none());
     }
 
+    /// A stateless token carries its scope and needs no stored session; a
+    /// token without a scope or an expiry is refused.
+    #[tokio::test]
+    async fn stateless_tokens_carry_their_scope() {
+        let setup = build_setup(
+            vec![public_metadata(CLIENT_ID)],
+            SetupOptions {
+                access_tokens: AccessTokens::Stateless,
+                ..Default::default()
+            },
+        );
+        let key = dpop_key();
+        let code = run_authorization(&setup, CLIENT_ID, &key, NOW).await;
+        let first = run_token(&setup, CLIENT_ID, &key, &code, NOW)
+            .await
+            .unwrap();
+        let claims = jwt::decode(&first.access_token).unwrap().claims;
+        assert_eq!(claims.extra["scope"], json!(first.scope));
+        // a token of the refresh grant is the same
+        let refresh = first.refresh_token.as_deref().unwrap();
+        let tokens = run_refresh(&setup, CLIENT_ID, &key, refresh, NOW)
+            .await
+            .unwrap();
+        let claims = jwt::decode(&tokens.access_token).unwrap().claims;
+        assert_eq!(claims.extra["scope"], json!(tokens.scope));
+        setup
+            .store
+            .delete_token(&tokens_jti(&tokens.access_token))
+            .await
+            .unwrap();
+        let verified = run_verify(&setup, &key, &tokens.access_token, NOW)
+            .await
+            .unwrap();
+        assert_eq!(verified.scopes.join(" "), tokens.scope);
+        let err = run_verify(&setup, &key, &tokens.access_token, NOW + TOKEN_MAX_AGE + 61)
+            .await
+            .unwrap_err();
+        assert!(err.error_description().contains("expired"));
+        let mut no_scope = claims.clone();
+        no_scope.extra.remove("scope");
+        let no_exp = JwtClaims {
+            exp: None,
+            ..claims
+        };
+        for claims in [no_scope, no_exp] {
+            let mut header = JwtHeader::new("ES256K");
+            header.typ = Some(ACCESS_TOKEN_TYP.to_string());
+            let token = jwt::sign(&header, &claims, &signing_jwk()).unwrap();
+            let err = run_verify(&setup, &key, &token, NOW).await.unwrap_err();
+            assert!(err.error_description().contains("malformed"));
+        }
+    }
+
     fn tokens_jti(access_token: &str) -> String {
         jwt::decode(access_token).unwrap().claims.jti.unwrap()
     }
@@ -3256,6 +3348,8 @@ mod tests {
         );
         let provider = OAuthProvider::new(OAuthProviderConfig {
             issuer: ISSUER.to_string(),
+            resource: ISSUER.to_string(),
+            access_tokens: AccessTokens::Stateful,
             audience: AUDIENCE.to_string(),
             signing_key: SigningKey::Symmetric(b"a shared secret".to_vec()),
             fetcher: Arc::new(StubFetcher { clients }),
