@@ -747,9 +747,29 @@ pub async fn build_rocket(rocket_cfg: Option<RocketConfig>) -> Rocket<Build> {
         Vec::new()
     };
 
+    let authorization_server: Vec<rocket::Route> = if shared_oauth_provider.external {
+        Vec::new()
+    } else {
+        routes![
+            oauth::routes::oauth_par,
+            oauth::routes::oauth_token,
+            oauth::routes::oauth_revoke,
+            oauth::routes::oauth_jwks,
+            oauth::routes::oauth_authorization_server_metadata,
+            oauth::routes::oauth_authorize,
+            oauth::routes::oauth_authorize_sign_in,
+            oauth::routes::oauth_authorize_select,
+            oauth::routes::oauth_authorize_accept,
+            oauth::routes::oauth_authorize_reject,
+            oauth::routes::oauth_authorize_reactivate,
+            oauth::routes::oauth_authorize_sign_up,
+        ]
+    };
+
     rocket::custom(figment)
         .mount("/", read_only_gate)
         .mount("/", account_pages)
+        .mount("/", authorization_server)
         .mount(
             "/",
             routes![
@@ -878,19 +898,7 @@ pub async fn build_rocket(rocket_cfg: Option<RocketConfig>) -> Rocket<Build> {
                 community::blacksky::pds::get_publication_frontier::get_publication_frontier,
                 community::lexicon::service::describe::service_describe,
                 well_known::well_known,
-                oauth::routes::oauth_par,
-                oauth::routes::oauth_token,
-                oauth::routes::oauth_revoke,
-                oauth::routes::oauth_jwks,
-                oauth::routes::oauth_authorization_server_metadata,
                 oauth::routes::oauth_protected_resource_metadata,
-                oauth::routes::oauth_authorize,
-                oauth::routes::oauth_authorize_sign_in,
-                oauth::routes::oauth_authorize_select,
-                oauth::routes::oauth_authorize_accept,
-                oauth::routes::oauth_authorize_reject,
-                oauth::routes::oauth_authorize_reactivate,
-                oauth::routes::oauth_authorize_sign_up,
                 ui::assets::ui_asset,
                 all_options
             ],

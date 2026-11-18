@@ -12,7 +12,9 @@ use rsky_oauth::dpop::{
 };
 use rsky_oauth::jwk::{EcCurve, Jwk, SigningKey};
 use rsky_oauth::store::{DeviceData, DEVICE_TOUCH_INTERVAL};
-use rsky_oauth::{OAuthError, OAuthProvider, OAuthProviderConfig, ScopeExpandError, ScopeExpander};
+use rsky_oauth::{
+    AccessTokens, OAuthError, OAuthProvider, OAuthProviderConfig, ScopeExpandError, ScopeExpander,
+};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -67,6 +69,19 @@ pub struct SharedOAuthProvider {
     pub provider: Arc<OAuthProvider>,
     /// Cookies carry `Secure` when the service is served over https
     pub secure_cookies: bool,
+    /// An external authorization server issues the tokens; this PDS only
+    /// checks them, and serves no authorization routes.
+    pub external: bool,
+}
+
+/// `PDS_OAUTH_ISSUER` and `PDS_OAUTH_ISSUER_JWK` (its public key as a JWK)
+/// name an external authorization server, whose stateless tokens this PDS
+/// accepts in place of its own.
+fn external_issuer_from_env() -> Option<(String, SigningKey)> {
+    let issuer = env_str("PDS_OAUTH_ISSUER")?;
+    let jwk = env_str("PDS_OAUTH_ISSUER_JWK").expect("PDS_OAUTH_ISSUER needs PDS_OAUTH_ISSUER_JWK");
+    let jwk: Jwk = serde_json::from_str(&jwk).expect("PDS_OAUTH_ISSUER_JWK must be a JWK");
+    Some((issuer, SigningKey::Ec(jwk)))
 }
 
 /// The access-token signing key: the shared session secret when the server
@@ -125,7 +140,13 @@ impl SharedOAuthProvider {
         audience: String,
         sessions_since: Option<u64>,
     ) -> Self {
-        let signing_key = signing_key_from_env();
+        let resource = issuer.clone();
+        let external = external_issuer_from_env();
+        let is_external = external.is_some();
+        let (issuer, signing_key, access_tokens) = match external {
+            Some((issuer, key)) => (issuer, key, AccessTokens::Stateless),
+            None => (issuer, signing_key_from_env(), AccessTokens::Stateful),
+        };
         let replay_store = replay_store_from_env().await;
         let nonce = match env_str("PDS_DPOP_SECRET") {
             Some(secret_hex) => {
@@ -140,6 +161,8 @@ impl SharedOAuthProvider {
         .expect("valid DPoP nonce rotation interval");
         let provider = OAuthProvider::new(OAuthProviderConfig {
             issuer,
+            resource,
+            access_tokens,
             audience,
             signing_key,
             fetcher: Arc::new(fetcher::HttpClientMetadataFetcher::default()),
@@ -151,6 +174,7 @@ impl SharedOAuthProvider {
         });
         Self {
             secure_cookies: provider.issuer().starts_with("https://"),
+            external: is_external,
             provider: Arc::new(provider),
         }
     }
