@@ -2,7 +2,7 @@ use crate::config::ServerConfig;
 use crate::handle::errors::{Error, ErrorKind, Result};
 use crate::SharedIdResolver;
 use explicit_slurs::has_explicit_slur;
-use reserved::RESERVED_SUBDOMAINS;
+use rsky_syntax::handle::reserved::RESERVED_SUBDOMAINS;
 use rocket::State;
 use rsky_syntax::handle::{is_valid_tld, normalize_and_ensure_valid_handle};
 
@@ -139,4 +139,3 @@ fn ensure_handle_service_constraints(
 
 pub mod errors;
 pub mod explicit_slurs;
-pub mod reserved;
