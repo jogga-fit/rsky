@@ -12,6 +12,7 @@ documentation = "https://docs.rs/rsky-common"
 
 
 [dependencies]
+rsky-syntax = { workspace = true }
 regex = "1.8.4"
 serde = { version = "1.0.217", features = ["derive"] }
 thiserror = "2.0.11"

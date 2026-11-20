@@ -1,5 +1,4 @@
 // CW: Offensive language ahead
-use crate::env::env_list;
 use regex::Regex;
 
 pub fn contains_explicit_slurs(text: &str) -> bool {
@@ -11,7 +10,9 @@ pub fn contains_explicit_slurs(text: &str) -> bool {
         r"(?i)\b(?:n[4a@]t[e3][\s._-]*h[1i!l][\s._-]*[g9]{2}[\s._-]*[e3]r[s5]?)(?:[A-Za-z0-9._-]*\.[A-Za-z0-9._-]+)?\b",
     ];
 
-    let excluded_words = env_list("LABELER_EXLUDED_SLURS");
+    let excluded_words: Vec<String> = std::env::var("LABELER_EXLUDED_SLURS")
+        .map(|s| s.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
 
     for pattern in &explicit_slur_patterns {
         let regex = Regex::new(pattern).expect("Invalid regex pattern");

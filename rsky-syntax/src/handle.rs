@@ -1,4 +1,6 @@
 pub mod reserved;
+pub mod service;
+pub mod slurs;
 
 use lazy_static::lazy_static;
 use regex::Regex;

@@ -167,7 +167,7 @@ pub fn validate_url(url_str: &String) -> Option<String> {
 
 pub mod r#async;
 pub mod env;
-pub mod explicit_slurs;
+pub use rsky_syntax::explicit_slurs;
 pub mod ipld;
 pub mod sign;
 pub mod tid;

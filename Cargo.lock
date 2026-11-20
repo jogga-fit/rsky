@@ -8196,6 +8196,7 @@ dependencies = [
  "rand_core 0.6.4",
  "regex",
  "rsky-identity",
+ "rsky-syntax",
  "secp256k1",
  "serde",
  "serde_ipld_dagcbor",
@@ -8726,6 +8727,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_derive",
+ "temp-env",
  "thiserror 1.0.69",
  "url",
 ]

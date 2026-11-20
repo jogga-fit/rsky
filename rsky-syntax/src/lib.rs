@@ -6,6 +6,7 @@ pub mod aturi;
 pub mod aturi_validation;
 pub mod datetime;
 pub mod did;
+pub mod explicit_slurs;
 pub mod handle;
 pub mod nsid;
 pub mod record_key;

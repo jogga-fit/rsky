@@ -28,4 +28,15 @@ impl Error {
     }
 }
 
+impl From<rsky_syntax::handle::service::ServiceHandleError> for Error {
+    fn from(e: rsky_syntax::handle::service::ServiceHandleError) -> Self {
+        use rsky_syntax::handle::service::ServiceHandleError::Reserved;
+        let kind = match e {
+            Reserved => ErrorKind::HandleNotAvailable,
+            _ => ErrorKind::InvalidHandle,
+        };
+        Self::new(kind, &e.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;

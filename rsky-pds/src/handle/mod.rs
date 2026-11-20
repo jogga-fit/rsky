@@ -1,9 +1,9 @@
 use crate::config::ServerConfig;
 use crate::handle::errors::{Error, ErrorKind, Result};
 use crate::SharedIdResolver;
-use explicit_slurs::has_explicit_slur;
-use rsky_syntax::handle::reserved::RESERVED_SUBDOMAINS;
 use rocket::State;
+use rsky_syntax::handle::service::{ensure_service_handle, is_service_domain};
+use rsky_syntax::handle::slurs::has_explicit_slur;
 use rsky_syntax::handle::{is_valid_tld, normalize_and_ensure_valid_handle};
 
 pub struct HandleValidationContext<'a> {
@@ -32,23 +32,22 @@ pub async fn normalize_and_validate_handle(
         ));
     }
 
-    // Slur check
-    if has_explicit_slur(&handle) {
-        return Err(Error::new(
-            ErrorKind::InvalidHandle,
-            "Inappropriate language in handle",
-        ));
-    }
-
     let service_domains = &ctx.server_config.identity.service_handle_domains;
     if is_service_domain(&handle, service_domains) {
         // Verify constraints on a service domain
-        ensure_handle_service_constraints(
+        ensure_service_handle(
             &handle,
             service_domains,
             opts.allow_reserved.unwrap_or(false),
         )?;
     } else {
+        // Slur check (`ensure_service_handle` does it for a service domain)
+        if has_explicit_slur(&handle) {
+            return Err(Error::new(
+                ErrorKind::InvalidHandle,
+                "Inappropriate language in handle",
+            ));
+        }
         if opts.did.is_none() {
             return Err(Error::new(
                 ErrorKind::UnsupportedDomain,
@@ -86,56 +85,4 @@ fn base_normalize_and_validate(handle: &str) -> Result<String> {
     }
 }
 
-// Anchor the match at a label boundary so sibling domains
-// (e.g. evilpds.example.com vs pds.example.com) never match
-fn as_dotted_suffix(domain: &String) -> String {
-    if domain.starts_with('.') {
-        domain.clone()
-    } else {
-        format!(".{domain}")
-    }
-}
-
-fn is_service_domain(handle: &str, available_user_domains: &[String]) -> bool {
-    available_user_domains
-        .iter()
-        .any(|domain| handle.ends_with(as_dotted_suffix(domain).as_str()))
-}
-
-fn ensure_handle_service_constraints(
-    handle: &str,
-    available_user_domains: &[String],
-    allow_reserved: bool,
-) -> Result<()> {
-    let supported_domain = available_user_domains
-        .iter()
-        .map(as_dotted_suffix)
-        .find(|domain| handle.ends_with(domain.as_str()))
-        .ok_or_else(|| Error::new(ErrorKind::InvalidHandle, "Invalid domain"))?;
-
-    let front = handle[..handle.len() - supported_domain.len()].to_string();
-
-    if front.contains('.') {
-        return Err(Error::new(
-            ErrorKind::InvalidHandle,
-            "Invalid characters in handle",
-        ));
-    }
-
-    if front.len() < 3 {
-        return Err(Error::new(ErrorKind::InvalidHandle, "Handle too short"));
-    }
-
-    if front.len() > 18 {
-        return Err(Error::new(ErrorKind::InvalidHandle, "Handle too long"));
-    }
-
-    if !allow_reserved && RESERVED_SUBDOMAINS.contains(front.as_str()) {
-        return Err(Error::new(ErrorKind::HandleNotAvailable, "Reserved handle"));
-    }
-
-    Ok(())
-}
-
 pub mod errors;
-pub mod explicit_slurs;
